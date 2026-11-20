@@ -18,8 +18,10 @@ on:
       - '.github/workflows/build-kernel.yml'
       - 'arch/arm64/configs/**'
       - 'drivers/Kconfig'
+      - 'drivers/input/**'
       - 'drivers/Makefile'
       - 'drivers/kernelsu/**'
+      - 'ksu-next-manual-hooks.patch'
       - 'fs/**'
       - 'include/**'
       - 'kernel/**'
@@ -41,6 +43,7 @@ jobs:
       LLVM_IAS: 1
       KBUILD_BUILD_USER: github-actions
       KBUILD_BUILD_HOST: hotdogb-ci
+      KSU_NEXT_COMMIT: 8af3d4fec33be32fa5d3f8dae4f380fac45bf2cd
 
     steps:
       - name: Check out kernel source
@@ -77,13 +80,49 @@ jobs:
           tar -xzf "$RUNNER_TEMP/gcc.tar.gz" -C "$RUNNER_TEMP/toolchains/aarch64-linux-android-4.9"
           "$RUNNER_TEMP/toolchains/clang-r383902/bin/clang" --version
 
+      - name: Apply KernelSU Next manual hooks
+        run: |
+          set -euxo pipefail
+          git apply --check ksu-next-manual-hooks.patch
+          git apply ksu-next-manual-hooks.patch
+
+      - name: Set up KernelSU Next v3.4.0-legacy
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          git -C KernelSU-Next checkout "$KSU_NEXT_COMMIT"
+          test "$(git -C KernelSU-Next rev-parse HEAD)" = "$KSU_NEXT_COMMIT"
+          ln -s ../KernelSU-Next/kernel drivers/kernelsu
+          grep -q 'kernelsu' drivers/Makefile || \
+            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || \
+            sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+      - name: Verify manual hooks
+        run: |
+          set -euxo pipefail
+          grep -q 'ksu_handle_execveat_ksud' fs/exec.c
+          grep -q 'ksu_handle_vfs_read' fs/read_write.c
+          grep -q 'ksu_handle_faccessat' fs/open.c
+          grep -q 'ksu_handle_stat' fs/stat.c
+          grep -q 'ksu_handle_newfstat_ret' fs/stat.c
+          grep -q 'ksu_handle_input_handle_event' drivers/input/input.c
+          grep -q 'ksu_handle_sys_reboot' kernel/reboot.c
+
       - name: Configure kernel
         run: |
           set -euxo pipefail
           export PATH="$RUNNER_TEMP/toolchains/clang-r383902/bin:$RUNNER_TEMP/toolchains/aarch64-linux-android-4.9/bin:$PATH"
           make O=out vendor/sm8150-perf_defconfig
           scripts/kconfig/merge_config.sh -m -O out out/.config arch/arm64/configs/vendor/oplus.config
+          scripts/config --file out/.config \
+            -e KSU -e KSU_MANUAL_HOOK \
+            -d KSU_KPROBES_HOOK -d KSU_SYSCALL_TABLE_HOOK
           make O=out olddefconfig
+          grep -E '^CONFIG_KSU=|^CONFIG_KSU_MANUAL_HOOK=' out/.config
+          test "$(scripts/config --file out/.config -s KSU)" = y
+          test "$(scripts/config --file out/.config -s KSU_MANUAL_HOOK)" = y
           cp out/.config dist-hotdogb.config
 
       - name: Build kernel and modules
@@ -115,7 +154,7 @@ jobs:
           # OnePlus 7T (hotdogb), LineageOS 24.0
 
           properties() { '
-          kernel.string=hotdogb LineageOS 24.0 baseline kernel
+          kernel.string=hotdogb LineageOS 24.0 KernelSU Next kernel
           do.devicecheck=1
           device.name1=hotdogb
           device.name2=OnePlus7T
@@ -132,7 +171,7 @@ jobs:
           EOF
 
           cd "$RUNNER_TEMP/AnyKernel3"
-          zip -r9 "$DIST/hotdogb-baseline-$SHORT_SHA-AnyKernel3.zip" . \
+          zip -r9 "$DIST/hotdogb-ksun-$SHORT_SHA-AnyKernel3.zip" . \
             -x '.git/*' README.md 'ramdisk/*' 'patch/*'
           cd "$GITHUB_WORKSPACE"
 
@@ -149,7 +188,7 @@ jobs:
           mapfile -d '' -t MKBOOTIMG_ARGS < "$RUNNER_TEMP/mkbootimg.args"
           python3 "$RUNNER_TEMP/mkbootimg/mkbootimg.py" "${MKBOOTIMG_ARGS[@]}" \
             --kernel out/arch/arm64/boot/Image \
-            --output "$DIST/hotdogb-baseline-$SHORT_SHA-boot.img"
+            --output "$DIST/hotdogb-ksun-$SHORT_SHA-boot.img"
 
           cd "$DIST"
           sha256sum ./* > SHA256SUMS
@@ -157,7 +196,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: hotdogb-baseline-${{ github.run_number }}
+          name: hotdogb-ksun-${{ github.run_number }}
           path: |
             dist/
             build.log
@@ -168,10 +207,10 @@ jobs:
         if: always()
         run: |
           {
-            echo '## hotdogb baseline kernel';
+            echo '## hotdogb KernelSU Next kernel';
             echo;
             echo "- Commit: \`$GITHUB_SHA\`";
-            echo '- KernelSU Next: not integrated yet';
+            echo '- KernelSU Next: v3.4.0-legacy (manual hooks), pinned commit `$KSU_NEXT_COMMIT`';
             echo '- SUSFS: not integrated yet';
             echo '- Flash only after checking the artifact and reference boot build.';
           } >> "$GITHUB_STEP_SUMMARY"
