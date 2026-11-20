@@ -1,0 +1,26 @@
+--- a/kernel/sulog/event.c
++++ b/kernel/sulog/event.c
+@@ -59,7 +59,11 @@
+ {
+     struct compat_sulog_entry entry = {0};
+     unsigned int uid = current_uid().val;
++#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
+     struct timespec64 ts;
++#else
++    struct timespec ts;
++#endif
+ 
+ #if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
+ 	ktime_get_boottime_ts64(&ts);
+@@ -87,7 +91,11 @@
+     struct sulog_entry_rcv_ptr sbuf = {0};
+     uint32_t uptime;
+     uint8_t local_idx;
++#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
+     struct timespec64 ts;
++#else
++    struct timespec ts;
++#endif
+     struct compat_sulog_entry *local_buf;
+ 
+     if (copy_from_user(&sbuf, uptr, sizeof(sbuf)))
