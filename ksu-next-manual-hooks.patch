@@ -1,3 +1,4 @@
+Verified SUSFS 2.4.0 CI trigger; patch content is unchanged.
 
 diff --git a/drivers/input/input.c b/drivers/input/input.c
 index 85e9c9649..77abc5246 100644
