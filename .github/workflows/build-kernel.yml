@@ -152,10 +152,25 @@ jobs:
           find out -name '*.ko' -type f -exec cp {} "$DIST/" \;
 
           # boot.img contains only the kernel. Ship the wlan.ko built against
-          # this exact kernel as a systemless KSU/Magisk helper via AnyKernel3.
+          # this exact kernel both as a KSU Next module and an AK3 helper.
           WLAN_KO="$(find out -type f -name 'wlan.ko' -print -quit)"
           test -n "$WLAN_KO"
           test -s "$WLAN_KO"
+
+          KSU_MODULE="$RUNNER_TEMP/hotdogb-ksun-wlan"
+          mkdir -p "$KSU_MODULE/system/vendor/lib/modules"
+          cp "$WLAN_KO" "$KSU_MODULE/system/vendor/lib/modules/wlan.ko"
+          cat > "$KSU_MODULE/module.prop" <<EOF
+          id=hotdogb-ksun-wlan
+          name=hotdogb KernelSU Next WLAN module
+          version=$SHORT_SHA
+          versionCode=1
+          author=GitHub Actions
+          description=wlan.ko built with hotdogb-ksun-$SHORT_SHA; remove before changing kernel
+          EOF
+          cd "$KSU_MODULE"
+          zip -r9 "$DIST/hotdogb-ksun-$SHORT_SHA-wlan-module.zip" .
+          cd "$GITHUB_WORKSPACE"
 
           git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git "$RUNNER_TEMP/AnyKernel3"
           # Upstream AK3 recognizes the original KernelSU manager package only.
