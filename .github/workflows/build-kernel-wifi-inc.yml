@@ -1,0 +1,227 @@
+name: Build hotdogb kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      reference_boot_url:
+        description: Official LineageOS boot.img matching the installed build
+        required: true
+        default: https://mirrorbits.lineageos.org/full/hotdogb/20261113/boot.img
+      reference_boot_sha256:
+        description: Optional SHA-256 of the reference boot.img
+        required: false
+        type: string
+  push:
+    branches:
+      - ksun-susfs
+    paths:
+      - '.github/workflows/build-kernel.yml'
+      - 'arch/arm64/configs/**'
+      - 'drivers/Kconfig'
+      - 'drivers/input/**'
+      - 'drivers/Makefile'
+      - 'drivers/kernelsu/**'
+      - 'ksu-next-manual-hooks.patch'
+      - 'ksu-next-4.14-compat.patch'
+      - 'fs/**'
+      - 'include/**'
+      - 'kernel/**'
+      - 'security/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      CROSS_COMPILE: aarch64-linux-gnu-
+      CLANG_TRIPLE: aarch64-linux-gnu-
+      LLVM: 1
+      LLVM_IAS: 1
+      KBUILD_BUILD_USER: github-actions
+      KBUILD_BUILD_HOST: hotdogb-ci
+      KSU_NEXT_COMMIT: 8af3d4fec33be32fa5d3f8dae4f380fac45bf2cd
+
+    steps:
+      - name: Check out kernel source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libncurses-dev python3 \
+            curl ca-certificates git zip unzip xz-utils cpio file
+
+      - name: Cache Android toolchains
+        id: toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/toolchains
+          key: android-clang-r383902-gcc49-v1
+
+      - name: Download AOSP Clang r383902 and GCC 4.9
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
+        env:
+          CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-11.0.0_r1/clang-r383902.tar.gz
+          GCC_URL: https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-11.0.0_r1.tar.gz
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/toolchains/clang-r383902"
+          mkdir -p "$RUNNER_TEMP/toolchains/aarch64-linux-android-4.9"
+          curl -fL --retry 5 --retry-all-errors "$CLANG_URL" -o "$RUNNER_TEMP/clang.tar.gz"
+          tar -xzf "$RUNNER_TEMP/clang.tar.gz" -C "$RUNNER_TEMP/toolchains/clang-r383902"
+          curl -fL --retry 5 --retry-all-errors "$GCC_URL" -o "$RUNNER_TEMP/gcc.tar.gz"
+          tar -xzf "$RUNNER_TEMP/gcc.tar.gz" -C "$RUNNER_TEMP/toolchains/aarch64-linux-android-4.9"
+          "$RUNNER_TEMP/toolchains/clang-r383902/bin/clang" --version
+
+      - name: Apply KernelSU Next manual hooks
+        run: |
+          set -euxo pipefail
+          git apply --check ksu-next-manual-hooks.patch
+          git apply ksu-next-manual-hooks.patch
+
+      - name: Set up KernelSU Next v3.4.0-legacy
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          git -C KernelSU-Next checkout "$KSU_NEXT_COMMIT"
+          test "$(git -C KernelSU-Next rev-parse HEAD)" = "$KSU_NEXT_COMMIT"
+          git -C KernelSU-Next apply --check ../ksu-next-4.14-compat.patch
+          git -C KernelSU-Next apply ../ksu-next-4.14-compat.patch
+          ln -s ../KernelSU-Next/kernel drivers/kernelsu
+          grep -q 'kernelsu' drivers/Makefile || \
+            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || \
+            sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+      - name: Verify manual hooks
+        run: |
+          set -euxo pipefail
+          grep -q 'ksu_handle_execveat_ksud' fs/exec.c
+          grep -q 'ksu_handle_vfs_read' fs/read_write.c
+          grep -q 'ksu_handle_faccessat' fs/open.c
+          grep -q 'ksu_handle_stat' fs/stat.c
+          grep -q 'ksu_handle_newfstat_ret' fs/stat.c
+          grep -q 'ksu_handle_input_handle_event' drivers/input/input.c
+          grep -q 'ksu_handle_sys_reboot' kernel/reboot.c
+
+      - name: Configure kernel
+        run: |
+          set -euxo pipefail
+          export PATH="$RUNNER_TEMP/toolchains/clang-r383902/bin:$RUNNER_TEMP/toolchains/aarch64-linux-android-4.9/bin:$PATH"
+          make O=out vendor/sm8150-perf_defconfig
+          scripts/kconfig/merge_config.sh -m -O out out/.config arch/arm64/configs/vendor/oplus.config
+          scripts/config --file out/.config \
+            -e KSU -e KSU_MANUAL_HOOK -e QCA_CLD_WLAN \
+            -d KSU_KPROBES_HOOK -d KSU_SYSCALL_TABLE_HOOK
+          make O=out olddefconfig
+          grep -E '^CONFIG_KSU=|^CONFIG_KSU_MANUAL_HOOK=|^CONFIG_QCA_CLD_WLAN=' out/.config
+          test "$(scripts/config --file out/.config -s KSU)" = y
+          test "$(scripts/config --file out/.config -s KSU_MANUAL_HOOK)" = y
+          test "$(scripts/config --file out/.config -s QCA_CLD_WLAN)" = y
+          cp out/.config dist-hotdogb.config
+
+      - name: Build kernel and modules
+        run: |
+          set -o pipefail
+          export PATH="$RUNNER_TEMP/toolchains/clang-r383902/bin:$RUNNER_TEMP/toolchains/aarch64-linux-android-4.9/bin:$PATH"
+          make O=out -j"$(nproc)" Image modules 2>&1 | tee build.log
+          test -s out/arch/arm64/boot/Image
+          file out/arch/arm64/boot/Image
+
+      - name: Package AnyKernel3 and repack boot.img
+        env:
+          REFERENCE_BOOT_URL: ${{ inputs.reference_boot_url || 'https://mirrorbits.lineageos.org/full/hotdogb/20261113/boot.img' }}
+          REFERENCE_BOOT_SHA256: ${{ inputs.reference_boot_sha256 }}
+        run: |
+          set -euxo pipefail
+          SHORT_SHA="${GITHUB_SHA::7}"
+          DIST="$GITHUB_WORKSPACE/dist"
+          mkdir -p "$DIST"
+
+          cp out/arch/arm64/boot/Image "$DIST/Image"
+          cp dist-hotdogb.config "$DIST/hotdogb.config"
+          cp out/Module.symvers "$DIST/Module.symvers"
+          find out -name '*.ko' -type f -exec cp {} "$DIST/" \;
+
+          # qcacld is built into Image (CONFIG_QCA_CLD_WLAN=y), so this build
+          # intentionally has no external qca_cld3_wlan.ko or KSU WLAN module.
+          test ! -e out/drivers/staging/qcacld-3.0/wlan.ko
+
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git "$RUNNER_TEMP/AnyKernel3"
+          cp out/arch/arm64/boot/Image "$RUNNER_TEMP/AnyKernel3/Image"
+          cat > "$RUNNER_TEMP/AnyKernel3/anykernel.sh" <<'EOF'
+          # AnyKernel3 Ramdisk Mod Script
+          # OnePlus 7T (hotdogb), LineageOS 24.0
+
+          properties() { '
+          kernel.string=hotdogb LineageOS 24.0 KernelSU Next kernel
+          do.devicecheck=1
+          device.name1=hotdogb
+          device.name2=OnePlus7T
+          device.name3=oneplus7t
+          BLOCK=boot
+          IS_SLOT_DEVICE=1
+          RAMDISK_COMPRESSION=auto
+          PATCH_VBMETA_FLAG=auto
+          '; }
+
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          EOF
+
+          cd "$RUNNER_TEMP/AnyKernel3"
+          zip -r9 "$DIST/hotdogb-ksun-$SHORT_SHA-AnyKernel3.zip" . \
+            -x '.git/*' README.md 'ramdisk/*' 'patch/*'
+          cd "$GITHUB_WORKSPACE"
+
+          curl -fL --retry 5 --retry-all-errors "$REFERENCE_BOOT_URL" -o "$RUNNER_TEMP/reference-boot.img"
+          if [ -n "$REFERENCE_BOOT_SHA256" ]; then
+            echo "$REFERENCE_BOOT_SHA256  $RUNNER_TEMP/reference-boot.img" | sha256sum -c -
+          fi
+
+          git clone --depth 1 https://android.googlesource.com/platform/system/tools/mkbootimg "$RUNNER_TEMP/mkbootimg"
+          mkdir -p "$RUNNER_TEMP/unpacked-boot"
+          python3 "$RUNNER_TEMP/mkbootimg/unpack_bootimg.py" \
+            --boot_img "$RUNNER_TEMP/reference-boot.img" \
+            --out "$RUNNER_TEMP/unpacked-boot" --format mkbootimg -0 > "$RUNNER_TEMP/mkbootimg.args"
+          mapfile -d '' -t MKBOOTIMG_ARGS < "$RUNNER_TEMP/mkbootimg.args"
+          python3 "$RUNNER_TEMP/mkbootimg/mkbootimg.py" "${MKBOOTIMG_ARGS[@]}" \
+            --kernel out/arch/arm64/boot/Image \
+            --output "$DIST/hotdogb-ksun-$SHORT_SHA-boot.img"
+
+          cd "$DIST"
+          sha256sum ./* > SHA256SUMS
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotdogb-ksun-${{ github.run_number }}
+          path: |
+            dist/
+            build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Build summary
+        if: always()
+        run: |
+          {
+            echo '## hotdogb KernelSU Next kernel';
+            echo;
+            echo "- Commit: \`$GITHUB_SHA\`";
+            echo '- KernelSU Next: v3.4.0-legacy (manual hooks), pinned commit `$KSU_NEXT_COMMIT`';
+            echo '- WLAN: built into the kernel (`CONFIG_QCA_CLD_WLAN=y`), no KSU WLAN module required';
+            echo '- SUSFS: not integrated yet';
+            echo '- Flash only after checking the artifact and reference boot build.';
+          } >> "$GITHUB_STEP_SUMMARY"
