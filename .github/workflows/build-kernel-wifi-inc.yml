@@ -1,4 +1,4 @@
-name: Build hotdogb kernel
+name: Build hotdogb kernel (built-in WLAN)
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ on:
     branches:
       - ksun-susfs
     paths:
-      - '.github/workflows/build-kernel.yml'
+      - '.github/workflows/build-kernel-wifi-inc.yml'
       - 'arch/arm64/configs/**'
       - 'drivers/Kconfig'
       - 'drivers/input/**'
@@ -180,7 +180,7 @@ jobs:
           EOF
 
           cd "$RUNNER_TEMP/AnyKernel3"
-          zip -r9 "$DIST/hotdogb-ksun-$SHORT_SHA-AnyKernel3.zip" . \
+          zip -r9 "$DIST/hotdogb-ksun-wifi-inc-$SHORT_SHA-AnyKernel3.zip" . \
             -x '.git/*' README.md 'ramdisk/*' 'patch/*'
           cd "$GITHUB_WORKSPACE"
 
@@ -197,7 +197,7 @@ jobs:
           mapfile -d '' -t MKBOOTIMG_ARGS < "$RUNNER_TEMP/mkbootimg.args"
           python3 "$RUNNER_TEMP/mkbootimg/mkbootimg.py" "${MKBOOTIMG_ARGS[@]}" \
             --kernel out/arch/arm64/boot/Image \
-            --output "$DIST/hotdogb-ksun-$SHORT_SHA-boot.img"
+            --output "$DIST/hotdogb-ksun-wifi-inc-$SHORT_SHA-boot.img"
 
           cd "$DIST"
           sha256sum ./* > SHA256SUMS
@@ -206,7 +206,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hotdogb-ksun-${{ github.run_number }}
+          name: hotdogb-ksun-wifi-inc-${{ github.run_number }}
           path: |
             dist/
             build.log
