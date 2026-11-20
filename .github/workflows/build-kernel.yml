@@ -148,10 +148,19 @@ jobs:
 
           cp out/arch/arm64/boot/Image "$DIST/Image"
           cp dist-hotdogb.config "$DIST/hotdogb.config"
+          cp out/Module.symvers "$DIST/Module.symvers"
           find out -name '*.ko' -type f -exec cp {} "$DIST/" \;
+
+          # boot.img contains only the kernel. Ship the wlan.ko built against
+          # this exact kernel as a systemless KSU/Magisk helper via AnyKernel3.
+          WLAN_KO="$(find out -type f -name 'wlan.ko' -print -quit)"
+          test -n "$WLAN_KO"
+          test -s "$WLAN_KO"
 
           git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git "$RUNNER_TEMP/AnyKernel3"
           cp out/arch/arm64/boot/Image "$RUNNER_TEMP/AnyKernel3/Image"
+          mkdir -p "$RUNNER_TEMP/AnyKernel3/modules/vendor/lib/modules"
+          cp "$WLAN_KO" "$RUNNER_TEMP/AnyKernel3/modules/vendor/lib/modules/wlan.ko"
           cat > "$RUNNER_TEMP/AnyKernel3/anykernel.sh" <<'EOF'
           # AnyKernel3 Ramdisk Mod Script
           # OnePlus 7T (hotdogb), LineageOS 24.0
@@ -159,6 +168,8 @@ jobs:
           properties() { '
           kernel.string=hotdogb LineageOS 24.0 KernelSU Next kernel
           do.devicecheck=1
+          do.modules=1
+          do.systemless=1
           device.name1=hotdogb
           device.name2=OnePlus7T
           device.name3=oneplus7t
