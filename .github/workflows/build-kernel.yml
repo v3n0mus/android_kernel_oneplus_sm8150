@@ -158,6 +158,15 @@ jobs:
           test -s "$WLAN_KO"
 
           git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git "$RUNNER_TEMP/AnyKernel3"
+          # Upstream AK3 recognizes the original KernelSU manager package only.
+          # Teach both detection sites the KernelSU Next manager package.
+          sed -i 's#/data/data/me.weishu.kernelsu#/data/data/com.rifsxd.ksunext#g' \
+            "$RUNNER_TEMP/AnyKernel3/tools/ak3-core.sh" \
+            "$RUNNER_TEMP/AnyKernel3/META-INF/com/google/android/update-binary"
+          test "$(grep -c '/data/data/com.rifsxd.ksunext' \
+            "$RUNNER_TEMP/AnyKernel3/tools/ak3-core.sh")" -eq 1
+          test "$(grep -c '/data/data/com.rifsxd.ksunext' \
+            "$RUNNER_TEMP/AnyKernel3/META-INF/com/google/android/update-binary")" -eq 1
           cp out/arch/arm64/boot/Image "$RUNNER_TEMP/AnyKernel3/Image"
           mkdir -p "$RUNNER_TEMP/AnyKernel3/modules/vendor/lib/modules"
           cp "$WLAN_KO" "$RUNNER_TEMP/AnyKernel3/modules/vendor/lib/modules/wlan.ko"
@@ -173,10 +182,10 @@ jobs:
           device.name1=hotdogb
           device.name2=OnePlus7T
           device.name3=oneplus7t
-          block=boot
-          is_slot_device=1
-          ramdisk_compression=auto
-          patch_vbmeta_flag=auto
+          BLOCK=boot
+          IS_SLOT_DEVICE=1
+          RAMDISK_COMPRESSION=auto
+          PATCH_VBMETA_FLAG=auto
           '; }
 
           . tools/ak3-core.sh;
