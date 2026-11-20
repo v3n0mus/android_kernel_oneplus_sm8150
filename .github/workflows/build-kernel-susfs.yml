@@ -23,7 +23,7 @@ on:
       - 'drivers/kernelsu/**'
       - 'ksu-next-manual-hooks.patch'
       - 'ksu-next-4.14-compat.patch'
-      - 'susfs-*.patch'
+      - 'susfs-*.patch*'
       - 'fs/**'
       - 'include/**'
       - 'kernel/**'
@@ -46,7 +46,6 @@ jobs:
       KBUILD_BUILD_USER: github-actions
       KBUILD_BUILD_HOST: hotdogb-ci
       KSU_NEXT_COMMIT: 8af3d4fec33be32fa5d3f8dae4f380fac45bf2cd
-      SUSFS_COMMIT: d36aa6aba911a47b9de6b88ba0f621c81581656d
 
     steps:
       - name: Check out kernel source
@@ -83,23 +82,13 @@ jobs:
           tar -xzf "$RUNNER_TEMP/gcc.tar.gz" -C "$RUNNER_TEMP/toolchains/aarch64-linux-android-4.9"
           "$RUNNER_TEMP/toolchains/clang-r383902/bin/clang" --version
 
-      - name: Integrate SUSFS 1.4.2 and apply manual hooks
+      - name: Integrate SUSFS 2.4.0 and apply manual hooks
         run: |
           set -euxo pipefail
-          git clone --filter=blob:none --no-checkout \
-            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
-          git -C susfs4ksu checkout "$SUSFS_COMMIT"
-          test "$(git -C susfs4ksu rev-parse HEAD)" = "$SUSFS_COMMIT"
-          git apply --check susfs-lineageos-4.14.patch
-          git apply susfs-lineageos-4.14.patch
-          cp susfs4ksu/kernel_patches/fs/susfs.c fs/susfs.c
-          cp susfs4ksu/kernel_patches/fs/sus_su.c fs/sus_su.c
-          cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/susfs.h
-          cp susfs4ksu/kernel_patches/include/linux/sus_su.h include/linux/sus_su.h
+          git apply --check susfs-lineageos-4.14-susfs-2.4.0.patch
+          git apply susfs-lineageos-4.14-susfs-2.4.0.patch
           git apply --check ksu-next-manual-hooks.patch
           git apply ksu-next-manual-hooks.patch
-          git apply --check susfs-manual-prctl-hook.patch
-          git apply susfs-manual-prctl-hook.patch
 
       - name: Set up KernelSU Next v3.4.0-legacy
         run: |
@@ -108,10 +97,8 @@ jobs:
             https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           git -C KernelSU-Next checkout "$KSU_NEXT_COMMIT"
           test "$(git -C KernelSU-Next rev-parse HEAD)" = "$KSU_NEXT_COMMIT"
-          git -C KernelSU-Next apply --check ../susfs-ksun-next-v3.4.0-legacy.patch
-          git -C KernelSU-Next apply ../susfs-ksun-next-v3.4.0-legacy.patch
-          git -C KernelSU-Next apply --check ../ksu-next-4.14-compat.patch
-          git -C KernelSU-Next apply ../ksu-next-4.14-compat.patch
+          git -C KernelSU-Next apply --check ../susfs-ksun-next-v3.4.0-susfs-2.4.0.patch
+          git -C KernelSU-Next apply ../susfs-ksun-next-v3.4.0-susfs-2.4.0.patch
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
           grep -q 'kernelsu' drivers/Makefile || \
             printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
@@ -128,10 +115,11 @@ jobs:
           grep -q 'ksu_handle_newfstat_ret' fs/stat.c
           grep -q 'ksu_handle_input_handle_event' drivers/input/input.c
           grep -q 'ksu_handle_sys_reboot' kernel/reboot.c
-          grep -q 'ksu_handle_prctl' kernel/sys.c
+          grep -q 'susfs_handle_supercall' KernelSU-Next/kernel/supercall/supercall.c
+          grep -q 'SUSFS_VERSION "v2.4.0"' include/linux/susfs.h
           test -s fs/susfs.c
           test -s include/linux/susfs.h
-          grep -q 'CONFIG_KSU_SUSFS_SUS_KSTAT' fs/inode.c
+          grep -q 'CONFIG_KSU_SUSFS_SUS_KSTAT' fs/stat.c
           grep -q 'CONFIG_KSU_SUSFS_SUS_MOUNT' fs/proc_namespace.c
 
       - name: Configure kernel
@@ -143,21 +131,25 @@ jobs:
           scripts/config --file out/.config \
             -e KSU -e KSU_MANUAL_HOOK -e QCA_CLD_WLAN \
             -e KSU_SUSFS -e KSU_SUSFS_SUS_PATH -e KSU_SUSFS_SUS_MOUNT \
-            -e KSU_SUSFS_SUS_KSTAT -e KSU_SUSFS_SUS_OVERLAYFS \
-            -e KSU_SUSFS_TRY_UMOUNT -e KSU_SUSFS_SPOOF_UNAME \
-            -e KSU_SUSFS_ENABLE_LOG \
-            -d KSU_KPROBES_HOOK -d KSU_SYSCALL_TABLE_HOOK -d KSU_SUSFS_SUS_SU
+            -e KSU_SUSFS_SUS_KSTAT -e KSU_SUSFS_SPOOF_UNAME \
+            -e KSU_SUSFS_ENABLE_LOG -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            -e KSU_SUSFS_OPEN_REDIRECT -e KSU_SUSFS_SUS_MAP \
+            -e KSU_SUSFS_PRIORITY_UID_FILTER -e THREAD_INFO_IN_TASK \
+            -d KSU_KPROBES_HOOK -d KSU_SYSCALL_TABLE_HOOK
           make O=out olddefconfig
           grep -E '^CONFIG_KSU=|^CONFIG_KSU_MANUAL_HOOK=|^CONFIG_QCA_CLD_WLAN=|^CONFIG_KSU_SUSFS' out/.config
           test "$(scripts/config --file out/.config -s KSU)" = y
           test "$(scripts/config --file out/.config -s KSU_MANUAL_HOOK)" = y
           test "$(scripts/config --file out/.config -s QCA_CLD_WLAN)" = y
           for opt in KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT \
-            KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SUS_OVERLAYFS KSU_SUSFS_TRY_UMOUNT \
-            KSU_SUSFS_SPOOF_UNAME KSU_SUSFS_ENABLE_LOG; do
+            KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SPOOF_UNAME KSU_SUSFS_ENABLE_LOG \
+            KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            KSU_SUSFS_OPEN_REDIRECT KSU_SUSFS_SUS_MAP \
+            KSU_SUSFS_PRIORITY_UID_FILTER; do
             test "$(scripts/config --file out/.config -s "$opt")" = y
           done
-          test "$(scripts/config --file out/.config -s KSU_SUSFS_SUS_SU)" = n
+          test "$(scripts/config --file out/.config -s THREAD_INFO_IN_TASK)" = y
           cp out/.config dist-hotdogb.config
 
       - name: Build kernel and modules
@@ -253,6 +245,6 @@ jobs:
             echo "- Commit: \`$GITHUB_SHA\`";
             echo '- KernelSU Next: v3.4.0-legacy (manual hooks), pinned commit `$KSU_NEXT_COMMIT`';
             echo '- WLAN: built into the kernel (`CONFIG_QCA_CLD_WLAN=y`), no KSU WLAN module required';
-            echo '- SUSFS: 1.4.2-kernel-4.14, pinned commit `$SUSFS_COMMIT`';
+            echo '- SUSFS: 2.4.0 non-GKI backport for Linux 4.14, reboot supercall ABI';
             echo '- Flash only after checking the artifact and reference boot build.';
           } >> "$GITHUB_STEP_SUMMARY"
