@@ -22,6 +22,7 @@ on:
       - 'drivers/Makefile'
       - 'drivers/kernelsu/**'
       - 'ksu-next-manual-hooks.patch'
+      - 'ksu-next-4.14-compat.patch'
       - 'fs/**'
       - 'include/**'
       - 'kernel/**'
@@ -93,6 +94,8 @@ jobs:
             https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
           git -C KernelSU-Next checkout "$KSU_NEXT_COMMIT"
           test "$(git -C KernelSU-Next rev-parse HEAD)" = "$KSU_NEXT_COMMIT"
+          git -C KernelSU-Next apply --check ../ksu-next-4.14-compat.patch
+          git -C KernelSU-Next apply ../ksu-next-4.14-compat.patch
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
           grep -q 'kernelsu' drivers/Makefile || \
             printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
@@ -194,13 +197,14 @@ jobs:
           sha256sum ./* > SHA256SUMS
 
       - name: Upload build artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hotdogb-ksun-${{ github.run_number }}
           path: |
             dist/
             build.log
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Build summary
